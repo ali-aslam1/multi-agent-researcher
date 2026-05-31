@@ -1,0 +1,50 @@
+================================================================================
+MULTI-AGENT RESEARCH ASSISTANT — STARTUP COMMANDS
+================================================================================
+
+This file contains the copy-pasteable commands to start both the backend API and
+the frontend dashboard. Open two separate terminal windows in this root folder.
+
+--------------------------------------------------------------------------------
+1. START THE BACKEND (FastAPI Server)
+--------------------------------------------------------------------------------
+Open terminal #1:
+
+# Step A: Navigate into the backend directory
+cd backend
+
+# Step B: Activate the virtual environment (choose matching prompt for your terminal)
+# For PowerShell:
+.\venv\Scripts\Activate.ps1
+# For Windows CMD:
+.\venv\Scripts\activate.bat
+
+# Step C: Install dependencies (only needed the first time)
+pip install -r requirements.txt
+
+# Step D: Run the FastAPI backend server
+python main.py
+
+* Alternately, you can run the server directly using one line (without activating):
+.\backend\venv\Scripts\python.exe backend\main.py
+
+* The backend API will be running at: http://localhost:8000
+* Backend interactive documentation is at: http://localhost:8000/docs
+
+
+--------------------------------------------------------------------------------
+2. START THE FRONTEND (Next.js App)
+--------------------------------------------------------------------------------
+Open terminal #2:
+
+# Step A: Navigate into the frontend directory
+cd frontend
+
+# Step B: Install dependencies (only needed the first time)
+npm install
+
+# Step C: Run the Next.js development server
+npm run dev
+
+* The frontend dashboard will be running at: http://localhost:3000
+================================================================================
