@@ -1,8 +1,9 @@
 import pprint
 import sys
+import asyncio
 from agent_graph import research_graph
 
-def run_test(query: str):
+async def run_test(query: str):
     print("=" * 80)
     print(f"STARTING RESEARCH GRAPH FOR QUERY: '{query}'")
     print("=" * 80)
@@ -13,18 +14,20 @@ def run_test(query: str):
         "sub_questions": [],
         "scraped_results": {},
         "summaries": {},
-        "contradictions": ""
+        "contradictions": "",
+        "source_urls": [],
+        "final_report": ""
     }
     
     # Run the graph step-by-step to see node outputs
     print("\n--- Starting Stream ---")
     
-    current_state = initial_state
+    current_state = initial_state.copy()
     try:
-        # Using stream to show step-by-step transition of nodes
-        for output in research_graph.stream(initial_state):
+        # Using astream to show step-by-step transition of nodes
+        async for output in research_graph.astream(initial_state):
             for node_name, node_output in output.items():
-                print(f"\n[STREAM CHECKPOINT] Node '{node_name}' finished executing.")
+                print(f"\n\n[STREAM CHECKPOINT] Node '{node_name}' finished executing.")
                 print(f"Keys modified/added in state: {list(node_output.keys())}")
                 
                 # Print specific debug output depending on node
@@ -52,6 +55,12 @@ def run_test(query: str):
                 if "contradictions" in node_output:
                     print("Critic evaluation result:")
                     print(node_output["contradictions"])
+                
+                if "final_report" in node_output:
+                    print("\nFinal Report Compilation Complete.")
+                    print("\n--- FINAL REPORT ---")
+                    print(node_output["final_report"])
+                    print("--------------------\n")
                     
                 # Update current_state with cumulative changes
                 current_state.update(node_output)
@@ -71,7 +80,9 @@ def run_test(query: str):
                 }
                 for sq, info in current_state["summaries"].items()
             ],
-            "contradictions": current_state["contradictions"]
+            "contradictions": current_state["contradictions"],
+            "source_urls": current_state.get("source_urls", []),
+            "final_report_preview": current_state.get("final_report", "")[:100] + "..."
         }
         
         pprint.pprint(final_dict, width=100, compact=True)
@@ -82,10 +93,10 @@ def run_test(query: str):
         traceback.print_exc()
 
 if __name__ == "__main__":
-    # Test query: we choose a classic debate topic likely to have differing viewpoints / contradictions to test the critic node
+    # Test query
     test_query = "Is caffeine intake good or bad for anxiety and sleep quality?"
     
     if len(sys.argv) > 1:
         test_query = " ".join(sys.argv[1:])
         
-    run_test(test_query)
+    asyncio.run(run_test(test_query))

@@ -7,7 +7,7 @@ from typing import TypedDict, List, Dict, Any
 import requests
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
-from groq import Groq
+from groq import Groq, AsyncGroq
 from langgraph.graph import StateGraph, START, END
 
 # Load environment variables
@@ -18,15 +18,17 @@ class AgentState(TypedDict):
     query: str                                         # The initial user query
     sub_questions: List[Any]                           # Decomposed sub-questions (list of strings or list of dicts)
     scraped_results: Dict[str, List[Dict[str, str]]]   # sub_question -> list of {"title", "url", "snippet"}
-    summaries: Dict[str, Dict[str, Any]]              # sub_question -> {"summary", "url"}
+    summaries: Dict[str, Dict[str, Any]]               # sub_question -> {"summary", "url"}
     contradictions: str                                # Critique / contradictions flagged
+    source_urls: List[Dict[str, str]]                  # Extracted source URLs and titles for citations
+    final_report: str                                  # The final aggregated coherent report
 
-# Helper: highly resilient web search with Tavily API (primary) and Mojeek scraping fallback
+# Helper: web search with Tavily API (primary) and Mojeek scraping fallback
 def search_web(query: str, max_results: int = 3) -> List[Dict[str, str]]:
     """
-    Highly resilient web search function.
-    Primary: Queries Tavily search API (highly reliable, structured, AI-optimized).
-    Fallback: Scrapes Mojeek Search (free, privacy-first, scraping-friendly web index).
+    Web search function.
+    Primary: Queries Tavily search API (structured, AI-optimized).
+    Fallback: Scrapes Mojeek Search (scraping-friendly web index).
     """
     tavily_key = os.getenv("TAVILY_API_KEY")
 
@@ -60,7 +62,7 @@ def search_web(query: str, max_results: int = 3) -> List[Dict[str, str]]:
     else:
         print("[Search Tool] TAVILY_API_KEY is not set in environment or .env file.")
 
-    # Engine 2: Mojeek Search (Fallback 1)
+    # Engine 2: Mojeek Search (Fallback)
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     }
@@ -206,7 +208,19 @@ def search_agent_node(state: AgentState) -> Dict[str, Any]:
         scraped_results[sq] = results
         print(f"  -> Found {len(results)} results")
         
-    return {"scraped_results": scraped_results}
+    source_urls = []
+    seen_urls = set()
+    for sq, results in scraped_results.items():
+        for r in results:
+            url = r.get("url")
+            if url and url not in seen_urls:
+                seen_urls.add(url)
+                source_urls.append({
+                    "title": r.get("title", "Untitled Source"),
+                    "url": url
+                })
+        
+    return {"scraped_results": scraped_results, "source_urls": source_urls}
 
 # Node 3: Summarizer Agent Node (Create clean summaries with citations)
 def summarizer_agent_node(state: AgentState) -> Dict[str, Any]:
@@ -315,6 +329,70 @@ def critic_agent_node(state: AgentState) -> Dict[str, Any]:
         
     return {"contradictions": contradictions}
 
+# Initialize Async Groq client
+def get_async_groq_client():
+    api_key = os.getenv("GROQ_API_KEY")
+    if not api_key:
+        raise ValueError("GROQ_API_KEY is not set in environmental variables or .env file.")
+    return AsyncGroq(api_key=api_key)
+
+# Node 5: Aggregator Node (Synthesizes all summaries and critiques into a final report)
+async def aggregator_node(state: AgentState) -> Dict[str, Any]:
+    print("\n--- [AGGREGATOR NODE] Generating Final Coherent Report ---")
+    query = state["query"]
+    summaries = state["summaries"]
+    contradictions = state["contradictions"]
+    source_urls = state.get("source_urls", [])
+    
+    # Format all summaries for the aggregator
+    summaries_text = ""
+    for sq, info in summaries.items():
+        summaries_text += f"Sub-Question: {sq}\nAnswer: {info['summary']}\n\n"
+        
+    # Format sources for prompting
+    sources_text = ""
+    for idx, src in enumerate(source_urls, 1):
+        sources_text += f"[{idx}] {src['title']} - {src['url']}\n"
+        
+    prompt = (
+        "You are an elite scientific and research reporter.\n"
+        "Your task is to synthesize the following sub-question summaries and the critic's contradiction analysis into a single, cohesive, comprehensive, and well-structured final research report.\n\n"
+        f"Initial Query: {query}\n\n"
+        "Research Summaries:\n"
+        f"{summaries_text}\n"
+        "Critic's Contradiction Audit / Feedback:\n"
+        f"{contradictions}\n\n"
+        "Available Sources:\n"
+        f"{sources_text}\n"
+        "Instructions:\n"
+        "1. Write a detailed final report in markdown. Use clear headings (#, ##, ###), bold text, and lists where appropriate to make it professional.\n"
+        "2. Directly address the user's initial query, integrating all the sub-answers into a single narrative.\n"
+        "3. Address and resolve any contradictions or conflicts flagged by the critic's feedback. Explain why they exist or how different sources view them.\n"
+        "4. Throughout the report, cite the relevant sources using bracket numbers (e.g., [1], [2]) matching the available sources list.\n"
+        "5. Do NOT append the list of sources/URLs at the end of the text. The system will display them separately. Just write the report content.\n"
+        "6. Do not include any meta-announcements or introductory filler (such as 'Here is the final report...'). Start directly with the title of the report."
+    )
+    try:
+        client = get_async_groq_client()
+        completion = await client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[
+                {"role": "system", "content": "You are a professional research report writer. Output only structured markdown."},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.3,
+            max_tokens=3000
+        )
+        
+        final_report = completion.choices[0].message.content or ""
+        print(f"[Aggregator Node] Completed report generation. Length: {final_report[:50]}... ({len(final_report)} chars)")
+        return {"final_report": final_report}
+        
+    except Exception as e:
+        print(f"[Aggregator Node] Error generating report: {e}")
+        error_msg = f"Error generating final report: {str(e)}"
+        return {"final_report": error_msg}
+
 # Build the LangGraph StateGraph
 workflow = StateGraph(AgentState)
 
@@ -323,13 +401,15 @@ workflow.add_node("orchestrator", orchestrator_node)
 workflow.add_node("search", search_agent_node)
 workflow.add_node("summarizer", summarizer_agent_node)
 workflow.add_node("critic", critic_agent_node)
+workflow.add_node("aggregator", aggregator_node)
 
 # Set the flow edges
 workflow.add_edge(START, "orchestrator")
 workflow.add_edge("orchestrator", "search")
 workflow.add_edge("search", "summarizer")
 workflow.add_edge("summarizer", "critic")
-workflow.add_edge("critic", END)
+workflow.add_edge("critic", "aggregator")
+workflow.add_edge("aggregator", END)
 
 # Compile the workflow graph
 research_graph = workflow.compile()

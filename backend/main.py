@@ -1,9 +1,12 @@
 import os
-from fastapi import FastAPI, HTTPException
+import json
+import asyncio
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from dotenv import load_dotenv
-from groq import Groq
+from agent_graph import research_graph
 
 # Load environment variables from .env file
 load_dotenv()
@@ -26,11 +29,6 @@ app.add_middleware(
 class ResearchRequest(BaseModel):
     query: str
 
-class ResearchResponse(BaseModel):
-    response: str
-    status: str
-    model_used: str
-
 @app.get("/")
 def read_root():
     return {
@@ -38,72 +36,104 @@ def read_root():
         "message": "Welcome to the Multi-Agent Research Assistant API. Check /docs for details."
     }
 
-@app.post("/research", response_model=ResearchResponse)
-def run_research(request: ResearchRequest):
+@app.post("/research")
+async def run_research(request: ResearchRequest):
     """
-    Core research endpoint. In Phase 1, this establishes a single direct call
-    to the Groq API to confirm end-to-end integration.
+    Core research endpoint. Orchestrates a multi-agent system using LangGraph
+    and streams stage/progress events back to the client using Server-Sent Events (SSE).
     """
     api_key = os.getenv("GROQ_API_KEY")
     
     # Check for empty, unset, or placeholder API keys
     if not api_key or "Replace this placeholder" in api_key or api_key == "YOUR_GROQ_API_KEY":
-        # We fallback to a clear reminder response rather than a hard crash
-        return ResearchResponse(
-            response=(
-                "API Key Not Configured!\n\n"
-                "Please configure your Groq API Key in the `backend/.env` file:\n"
-                "`GROQ_API_KEY=your_actual_groq_key`\n\n"
-                "Once configured, restart the backend server and try your query again."
-            ),
-            status="API_KEY_MISSING",
-            model_used="None"
-        )
+        async def key_missing_generator():
+            yield "data: {}\n\n".format(json.dumps({
+                "type": "status",
+                "status": "API_KEY_MISSING",
+                "message": (
+                    "API Key Not Configured!\n\n"
+                    "Please configure your Groq API Key in the `backend/.env` file:\n"
+                    "`GROQ_API_KEY=your_actual_groq_key`\n\n"
+                    "Once configured, restart the backend server and try your query again."
+                )
+            }))
+        return StreamingResponse(key_missing_generator(), media_type="text/event-stream")
 
-    try:
-        # Initialize Groq Client
-        client = Groq(api_key=api_key)
-        
-        # We use llama-3.3-70b-versatile as the modern default high-performance model on Groq
-        model = "llama-3.3-70b-versatile"
-        
-        # Perform single direct call
-        completion = client.chat.completions.create(
-            model=model,
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "You are an elite research assistant. Provide structured, accurate, "
-                        "and deeply informative responses to the user's research topic. "
-                        "Structure your output using clear markdown headings, bullet points, and strong emphasis."
-                    )
-                },
-                {
-                    "role": "user",
-                    "content": request.query
-                }
-            ],
-            temperature=0.7,
-            max_tokens=2048,
-        )
-        
-        response_text = completion.choices[0].message.content
-        
-        return ResearchResponse(
-            response=response_text,
-            status="success",
-            model_used=model
-        )
-        
-    except Exception as e:
-        # Gracefully handle API call failure
-        error_msg = str(e)
-        return ResearchResponse(
-            response=f"Error communicating with Groq API:\n\n{error_msg}\n\nMake sure your API key in `backend/.env` is active and correct.",
-            status="error",
-            model_used="llama-3.3-70b-versatile"
-        )
+    async def event_generator():
+        queue = asyncio.Queue()
+
+        # Initialize the graph state
+        initial_state = {
+            "query": request.query,
+            "sub_questions": [],
+            "scraped_results": {},
+            "summaries": {},
+            "contradictions": "",
+            "source_urls": [],
+            "final_report": ""
+        }
+
+        # Run the graph in a background task
+        async def run_graph():
+            try:
+                # Stream the LangGraph execution steps
+                async for event in research_graph.astream(initial_state):
+                    await queue.put({"type": "node", "event": event})
+                await queue.put({"type": "done"})
+            except Exception as e:
+                import traceback
+                traceback.print_exc()
+                await queue.put({"type": "error", "message": str(e)})
+
+        graph_task = asyncio.create_task(run_graph())
+
+        try:
+            while True:
+                item = await queue.get()
+                
+                if item["type"] == "done":
+                    break
+                elif item["type"] == "error":
+                    yield "data: {}\n\n".format(json.dumps({
+                        "type": "status",
+                        "status": "error",
+                        "message": item["message"]
+                    }))
+                    break
+                elif item["type"] == "node":
+                    event = item["event"]
+                    node_name = list(event.keys())[0]
+                    node_output = event[node_name]
+                    
+                    payload = {"type": "status", "node": node_name}
+                    
+                    if node_name == "orchestrator":
+                        payload["status"] = "decomposed"
+                        payload["sub_questions"] = node_output.get("sub_questions", [])
+                    elif node_name == "search":
+                        payload["status"] = "searched"
+                        payload["scraped_results"] = node_output.get("scraped_results", {})
+                        payload["source_urls"] = node_output.get("source_urls", [])
+                    elif node_name == "summarizer":
+                        payload["status"] = "summarized"
+                        payload["summaries"] = node_output.get("summaries", {})
+                    elif node_name == "critic":
+                        payload["status"] = "critiqued"
+                        payload["contradictions"] = node_output.get("contradictions", "")
+                    elif node_name == "aggregator":
+                        payload["status"] = "completed"
+                        payload["final_report"] = node_output.get("final_report", "")
+                        payload["source_urls"] = initial_state.get("source_urls", []) # Fallback/Reference
+                        
+                    yield "data: {}\n\n".format(json.dumps(payload))
+        except asyncio.CancelledError:
+            graph_task.cancel()
+            raise
+        finally:
+            if not graph_task.done():
+                graph_task.cancel()
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 if __name__ == "__main__":
     import uvicorn
