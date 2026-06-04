@@ -1,75 +1,100 @@
-# Multi-Agent Research Assistant 🌌
+# Multi-Agent Research Assistant
 
-An autonomous AI Research Assistant built using **FastAPI**, **Next.js (React)**, **Groq LPU Inference**, and **LangGraph**. The system takes a single user research topic, dynamically breaks it down into sub-queries, delegates those queries to specialized sub-agents, and aggregates the results into a structured, responsive markdown report with inline citations and sources.
+An autonomous AI research tool that accepts a natural language query, breaks it into sub-questions, searches the web, summarizes sources, audits contradictions, and compiles a final cited markdown report — all streamed live to the browser.
+
+**Stack:** FastAPI · Next.js · LangGraph · Groq (llama-3.3-70b) · Tavily · Mojeek
+
+---
+
+## How It Works
+
+The backend runs a 5-node LangGraph pipeline, streamed to the frontend via Server-Sent Events (SSE):
+
+| Node | Role |
+|---|---|
+| **Orchestrator** | Decomposes the query into 2–3 focused sub-questions with optimized search terms |
+| **Search Agent** | Queries Tavily API (primary) or scrapes Mojeek (fallback) for each sub-question |
+| **Summarizer** | Sends each set of search results to Groq and generates a factual summary with citation |
+| **Critic** | Analyzes all summaries for contradictions and conflicting facts across sources |
+| **Aggregator** | Synthesizes everything into a single structured markdown report with inline citations |
+
+The frontend tracks each pipeline stage in real time and renders the final report with a custom markdown parser.
 
 ---
 
 ## Project Structure
 
-```text
-├── backend/                  # FastAPI Application
-│   ├── venv/                 # Python Virtual Environment
-│   ├── .env                  # API Key Config (.gitignore-ed)
-│   ├── main.py               # FastAPI server & Groq SDK integration
-│   └── requirements.txt      # Backend Python dependencies
+```
+├── backend/
+│   ├── agent_graph.py      # LangGraph graph: all 5 agent nodes + web search logic
+│   ├── main.py             # FastAPI server, POST /research endpoint, SSE streaming
+│   ├── test_graph.py       # Graph unit tests
+│   ├── requirements.txt    # Python dependencies
+│   └── .env                # API keys (gitignored)
 │
-├── frontend/                 # Next.js Application
-│   ├── src/app/
-│   │   ├── page.jsx          # UI dashboard & Markdown parser
-│   │   ├── layout.jsx        # App layout metadata
-│   │   └── globals.css       # Premium custom Vanilla CSS stylesheet
-│   ├── package.json          # Frontend packages & fallback dev scripts
-│   └── next.config.mjs       # Next.js ES module configuration
-│
-└── run.txt                   # Quick startup command checklist
+└── frontend/
+    └── src/app/
+        ├── page.jsx        # UI dashboard, SSE consumer, pipeline tracker, markdown renderer
+        ├── layout.jsx      # App layout & metadata
+        └── globals.css     # Stylesheet
 ```
 
 ---
 
-## Quick Start Instructions
+## Prerequisites
 
-You will need two terminals open in the root folder of this project.
+- Python 3.10+
+- Node.js 18+
+- A [Groq API key](https://console.groq.com) — required
+- A [Tavily API key](https://app.tavily.com) — optional but recommended (falls back to Mojeek scraping without it)
 
-### 1. Configure API Keys
-Before running, open `backend/.env` and replace the placeholder with your actual **Groq API Key**:
+---
+
+## Setup & Running
+
+Two terminals are required — one for the backend, one for the frontend.
+
+### Backend (Terminal 1)
+
+Configure your API keys in `backend/.env`:
 ```env
-GROQ_API_KEY=gsk_your_actual_key_here
+GROQ_API_KEY=your_groq_key_here
+TAVILY_API_KEY=your_tavily_key_here
 ```
 
-### 2. Start the Backend API (Terminal 1)
 ```bash
-# Navigate to backend
 cd backend
 
-# Activate your virtual environment
-# For PowerShell:
+# Activate virtual environment
+# PowerShell:
 .\venv\Scripts\Activate.ps1
-# For CMD:
+# CMD:
 .\venv\Scripts\activate.bat
 
-# Start FastAPI server
+# Install dependencies (first time only)
+pip install -r requirements.txt
+
+# Start the server
 python main.py
 ```
-*The API server will listen on [http://localhost:8000](http://localhost:8000).*
 
-### 3. Start the Frontend Dashboard (Terminal 2)
+API runs at `http://localhost:8000` · Swagger docs at `http://localhost:8000/docs`
+
+### Frontend (Terminal 2)
+
 ```bash
-# Navigate to frontend
 cd frontend
-
-# Install package dependencies
-npm install
-
-# Launch Next.js dev server
+npm install       # first time only
 npm run dev
 ```
-*The dashboard UI will boot up on [http://localhost:3000](http://localhost:3000).*
+
+Dashboard runs at `http://localhost:3000`
 
 ---
 
-## Phase 1 Deliverables Achieved
-- [x] **Venv Isolation**: Uncorrupted virtual environment configured under `backend/venv` storing dependencies natively.
-- [x] **FastAPI Endpoint**: Exposed POST `/research` endpoint utilizing the official Groq SDK with type-safe schemas.
-- [x] **Webpack Dev Fallback**: Custom Next.js script configurations bypassing platform SWC compile issues on Windows systems.
-- [x] **Premium Glassmorphic Design**: Clean custom CSS using deep space gradients, reactive glowing layout focus states, spinning orchestrator loaders, and a responsive layout.
-- [x] **Local Markdown Parser**: Seamlessly renders headings, lists, bold formatting, inline code block styling, and blockquotes for raw model output.
+## Web Search Behavior
+
+- **With `TAVILY_API_KEY` set:** Uses the Tavily Search API — structured, fast, AI-optimized results.
+- **Without it:** Falls back to scraping [Mojeek](https://www.mojeek.com), a scraping-friendly search engine. Results may be less precise.
+
+Setting the Tavily key is strongly recommended for best research quality.
