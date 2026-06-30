@@ -98,3 +98,6 @@ Dashboard runs at `http://localhost:3000`
 - **Without it:** Falls back to scraping [Mojeek](https://www.mojeek.com), a scraping-friendly search engine. Results may be less precise.
 
 Setting the Tavily key is strongly recommended for best research quality.
+
+
+# Trigger CI run
