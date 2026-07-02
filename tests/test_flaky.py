@@ -6,4 +6,4 @@ def test_flaky_timing():
     start = time.time()
     time.sleep(0.01)
     duration = time.time() - start
-    assert duration < 0.012
+    assert False, "Testing CI triage comment posting! (Phase 5)"
