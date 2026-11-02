@@ -14,32 +14,12 @@ The system uses a sequential 5-node LangGraph state machine. Each node updates t
 
 ```mermaid
 flowchart TD
-    subgraph Frontend ["Frontend (Next.js Dashboard)"]
-        UI["User Query Input"]
-        Tracker["Stage Tracker: Planning → Searching → Summarizing → Fact-checking → Writing"]
-        ReportView["Markdown Report Viewer + Interactive Sources"]
-    end
-
-    subgraph Backend ["Backend (FastAPI + LangGraph)"]
-        direction TB
-        Orchestrator["1. Orchestrator Node\nDecomposes query into 2-3 focused search queries"]
-        Search["2. Search Agent Node\nQueries Tavily API or falls back to Mojeek scraper"]
-        Summarizer["3. Summarizer Node\nSynthesizes factual answers and extracts primary source URL"]
-        Critic["4. Critic Node\nAudits summaries for contradictions or conflicting claims"]
-        Aggregator["5. Aggregator Node\nCompiles final structured report with [1], [2] citations"]
-    end
-
-    UI -->|"POST /research"| Orchestrator
-    Orchestrator --> Search
-    Search --> Summarizer
-    Summarizer --> Critic
-    Critic --> Aggregator
-
-    Orchestrator -.->|"SSE: decomposed"| Tracker
-    Search -.->|"SSE: searched"| Tracker
-    Summarizer -.->|"SSE: summarized"| Tracker
-    Critic -.->|"SSE: critiqued"| Tracker
-    Aggregator -.->|"SSE: completed (final_report)"| ReportView
+    Query([User Query]) --> Orchestrator["1. Orchestrator\nDecomposes query into 2–3 focused search questions"]
+    Orchestrator -->|"Sub-questions"| Search["2. Search Agent\nQueries Tavily API or scrapes Mojeek"]
+    Search -->|"Web snippets"| Summarizer["3. Summarizer\nExtracts key facts and source citations via Groq"]
+    Summarizer -->|"Sub-summaries"| Critic["4. Critic\nAudits cross-source contradictions via Groq"]
+    Critic -->|"Audited findings"| Aggregator["5. Aggregator\nCompiles final cited report via Groq"]
+    Aggregator --> Report([Final Markdown Report\nStreamed to Next.js via SSE])
 ```
 
 ### Node Breakdown
@@ -73,6 +53,7 @@ flowchart TD
 │   ├── package.json        # Next.js 16, React 19, Tailwind CSS v4
 │   └── next.config.mjs     # Next.js configuration
 │
+├── .gitignore              # Ignores venv, node_modules, and .env credentials
 ├── run.txt                 # Quick copy-paste startup reference
 └── README.md
 ```
